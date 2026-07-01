@@ -4,13 +4,16 @@ import asyncio
 import html
 import re
 import time
+import uuid
 from collections.abc import AsyncIterator
 from typing import Protocol
 from uuid import UUID
 
 import httpx
-from aiogram.enums import ParseMode
+from aiogram import Bot
+from aiogram.enums import ChatAction, ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.methods.base import TelegramMethod
 from aiogram.types import Message
 
 
@@ -21,8 +24,23 @@ class BackendProtocol(Protocol):
     async def get_or_create_chat(self, owner_external_id: str, interface: str) -> UUID:
         ...
 
-    def send_message(self, chat_id: UUID, content: str) -> AsyncIterator[str]:
+    def send_message(
+        self,
+        chat_id: UUID,
+        content: str,
+        media: bytes | None = None,
+        mime: str | None = None,
+    ) -> AsyncIterator[str]:
         ...
+
+
+class SendMessageDraft(TelegramMethod[bool]):
+    __returning__ = bool
+    __api_method__ = "sendMessageDraft"
+
+    chat_id: int
+    text: str
+    draft_id: int
 
 
 def owner_external_id(message: Message) -> str:
@@ -41,6 +59,13 @@ def backend_error_text(error: Exception) -> str:
     if isinstance(error, httpx.ReadTimeout):
         return "Backend слишком долго отвечает. Попробуйте ещё раз чуть позже."
     if isinstance(error, httpx.HTTPStatusError):
+        try:
+            payload = error.response.json()
+        except ValueError:
+            payload = {}
+        detail = payload.get("error", {}).get("message") if isinstance(payload, dict) else None
+        if detail:
+            return str(detail)
         return f"Backend вернул ошибку {error.response.status_code}. Попробуйте позже."
     return "Backend временно недоступен. Попробуйте позже."
 
@@ -66,6 +91,70 @@ async def render_stream(
     if buffer and buffer != rendered:
         await _edit_text(target, buffer)
     return buffer
+
+
+async def stream_to_chat(message: Message, chunks: AsyncIterator[str]) -> str:
+    draft_id = uuid.uuid4().int & 0xFFFFFFFF
+    buffer = ""
+    last_draft_at = 0.0
+    min_draft_interval = 1.5
+
+    await _send_message_draft(message.bot, message.chat.id, "", draft_id)
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+
+    async for chunk in chunks:
+        buffer += chunk
+        now = time.monotonic()
+        if buffer.strip() and now - last_draft_at >= min_draft_interval:
+            await _send_message_draft(message.bot, message.chat.id, buffer, draft_id)
+            last_draft_at = time.monotonic()
+
+    if buffer:
+        await _send_message(message, _normalize_assistant_text(buffer))
+    else:
+        await _send_message(
+            message,
+            "Backend не вернул текст ответа. Попробуйте ещё раз или отправьте другой файл.",
+        )
+    return buffer
+
+
+async def _send_message_draft(bot: Bot, chat_id: int, text: str, draft_id: int) -> None:
+    try:
+        native = getattr(bot, "send_message_draft", None)
+        if native is not None:
+            await native(chat_id=chat_id, text=text, draft_id=draft_id)
+            return
+        await bot(SendMessageDraft(chat_id=chat_id, text=text, draft_id=draft_id))
+    except TelegramRetryAfter:
+        return
+
+
+async def _send_message(message: Message, text: str) -> None:
+    rendered_text = markdown_to_telegram_html(text)
+    while True:
+        try:
+            await message.bot.send_message(
+                chat_id=message.chat.id,
+                text=rendered_text,
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        except TelegramRetryAfter as error:
+            await asyncio.sleep(float(error.retry_after) + 0.1)
+        except TelegramBadRequest as error:
+            if _should_fallback_to_plain_text(error):
+                await message.bot.send_message(chat_id=message.chat.id, text=text)
+                return
+            raise
+
+
+def _normalize_assistant_text(text: str) -> str:
+    text = re.sub(r"(?<=[А-Яа-яЁё])(?=[A-Za-z])", " ", text)
+    text = re.sub(r"(?<=[A-Za-z])(?=[А-Яа-яЁё])", " ", text)
+    text = re.sub(r"\bревьюю\b", "ревью", text, flags=re.IGNORECASE)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 async def _edit_text(target: Message, text: str) -> None:

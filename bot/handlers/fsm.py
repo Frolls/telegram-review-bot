@@ -6,8 +6,9 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from bot.handlers.utils import backend_error_text, get_chat_id, render_stream
+from bot.handlers.utils import backend_error_text, get_chat_id, stream_to_chat
 from bot.keyboards.inline import TOPICS, topics_kb
+from bot.keyboards.reply import ASK_BUTTON
 from bot.services.backend_client import BackendClient
 from bot.states import AskFlow
 
@@ -16,6 +17,7 @@ router = Router()
 
 
 @router.message(Command("ask"))
+@router.message(F.text == ASK_BUTTON)
 async def ask_command(message: Message, state: FSMContext) -> None:
     await state.set_state(AskFlow.waiting_for_topic)
     await message.answer("Выберите тему вопроса:", reply_markup=topics_kb())
@@ -56,8 +58,7 @@ async def ask_question(message: Message, state: FSMContext, backend: BackendClie
 
     try:
         chat_id = await get_chat_id(message, backend)
-        response_message = await message.answer("...")
-        await render_stream(response_message, backend.send_message(chat_id, prompt))
+        await stream_to_chat(message, backend.send_message(chat_id, prompt))
     except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as error:
         await message.answer(backend_error_text(error))
         return

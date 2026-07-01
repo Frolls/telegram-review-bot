@@ -9,6 +9,8 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 class Settings(BaseSettings):
     bot_token: str = Field(alias="BOT_TOKEN")
     backend_url: AnyHttpUrl = Field(alias="BACKEND_URL")
+    internal_token: str = Field(default="changeme", alias="INTERNAL_TOKEN")
+    bot_api_port: int = Field(default=8081, alias="BOT_API_PORT")
     bot_admin_ids: Annotated[list[int], NoDecode] = Field(
         default_factory=list,
         alias="BOT_ADMIN_IDS",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from uuid import UUID
 
@@ -42,22 +43,35 @@ class BackendClient:
         media: bytes | None = None,
         mime: str | None = None,
     ) -> AsyncIterator[str]:
-        payload = {"content": content}
+        data = {"content": content}
+        files = None
         if media is not None:
-            payload["media"] = media.decode("latin1")
-            if mime is not None:
-                payload["mime"] = mime
+            filename = _filename_for_mime(mime)
+            files = {"media": (filename, media, mime or "application/octet-stream")}
 
         async with self._client.stream(
             "POST",
             f"/chats/{chat_id}/messages",
-            json=payload,
+            data=data,
+            files=files,
+            timeout=120.0,
         ) as response:
             response.raise_for_status()
-            async for token in _iter_sse_data(response):
-                if token == "[DONE]":
+            async for payload in _iter_sse_data(response):
+                if payload == "[DONE]":
                     break
-                yield token
+                try:
+                    event = json.loads(payload)
+                except json.JSONDecodeError:
+                    yield payload
+                    continue
+                if event.get("type") == "token":
+                    yield str(event.get("delta", ""))
+                elif event.get("type") == "error":
+                    yield str(event.get("message") or "Backend не смог обработать сообщение.")
+                    return
+                elif event.get("type") == "done":
+                    return
 
     async def clear_messages(self, chat_id: UUID) -> None:
         response = await self._client.delete(f"/chats/{chat_id}/messages")
@@ -84,3 +98,20 @@ async def _iter_sse_data(response: httpx.Response) -> AsyncIterator[str]:
 
     if data_lines:
         yield "\n".join(data_lines)
+
+
+def _filename_for_mime(mime: str | None) -> str:
+    if mime == "application/pdf":
+        return "file.pdf"
+    if mime and mime.endswith("wordprocessingml.document"):
+        return "file.docx"
+    if mime == "audio/ogg":
+        return "audio.ogg"
+    if mime == "audio/mpeg":
+        return "audio.mp3"
+    if mime == "audio/mp4":
+        return "audio.m4a"
+    if mime and mime.startswith("image/"):
+        subtype = mime.split("/", 1)[1].split(";", 1)[0] or "jpeg"
+        return f"image.{subtype}"
+    return "file.bin"

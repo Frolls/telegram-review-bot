@@ -36,7 +36,11 @@ async def test_send_message_parses_sse_frames() -> None:
         assert request.url.path == f"/chats/{chat_id}/messages"
         return httpx.Response(
             200,
-            content=b"data: Hel\n\ndata: lo\n\ndata: [DONE]\n\n",
+            content=(
+                b'data: {"type": "token", "delta": "Hel"}\n\n'
+                b'data: {"type": "token", "delta": "lo"}\n\n'
+                b'data: {"type": "done"}\n\n'
+            ),
             headers={"content-type": "text/event-stream"},
         )
 
@@ -57,7 +61,11 @@ async def test_send_message_preserves_token_leading_spaces() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
-            content=b"data: Hello\n\ndata:  world\n\ndata: [DONE]\n\n",
+            content=(
+                b'data: {"type": "token", "delta": "Hello"}\n\n'
+                b'data: {"type": "token", "delta": " world"}\n\n'
+                b'data: {"type": "done"}\n\n'
+            ),
             headers={"content-type": "text/event-stream"},
         )
 
@@ -69,6 +77,40 @@ async def test_send_message_preserves_token_leading_spaces() -> None:
         text = "".join([token async for token in client.send_message(chat_id, "Hi")])
 
     assert text == "Hello world"
+
+
+@pytest.mark.asyncio
+async def test_send_message_sends_media_as_multipart() -> None:
+    chat_id = uuid4()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = await request.aread()
+        assert request.headers["content-type"].startswith("multipart/form-data")
+        assert b'name="content"' in body
+        assert b'name="media"; filename="audio.ogg"' in body
+        assert b"voice-bytes" in body
+        return httpx.Response(
+            200,
+            content=b'data: {"type": "done"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="http://backend",
+    ) as http_client:
+        client = BackendClient("http://backend", client=http_client)
+        tokens = [
+            token
+            async for token in client.send_message(
+                chat_id,
+                "voice",
+                media=b"voice-bytes",
+                mime="audio/ogg",
+            )
+        ]
+
+    assert tokens == []
 
 
 @pytest.mark.asyncio

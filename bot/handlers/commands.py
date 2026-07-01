@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import httpx
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from bot.handlers.utils import backend_error_text, get_chat_id
+from bot.keyboards.reply import ASK_BUTTON, CANCEL_BUTTON, CLEAR_BUTTON, HELP_BUTTON, main_menu_kb
 from bot.services.backend_client import BackendClient
 
 
@@ -14,14 +15,15 @@ router = Router()
 
 
 @router.message(Command("cancel"))
+@router.message(F.text == CANCEL_BUTTON)
 async def cancel_command(message: Message, state: FSMContext) -> None:
     current_state = await state.get_state()
     if current_state is None:
-        await message.answer("Нет активного сценария.")
+        await message.answer("Нет активного сценария.", reply_markup=main_menu_kb())
         return
 
     await state.clear()
-    await message.answer("Сценарий отменён.")
+    await message.answer("Сценарий отменён.", reply_markup=main_menu_kb())
 
 
 @router.message(Command("start"))
@@ -38,22 +40,26 @@ async def start_command(message: Message, backend: BackendClient) -> None:
         "Помогаю разбирать pull request'ы, качество Python/Ansible-кода, "
         "рефакторинг, тесты, читаемость и поддерживаемость решений.\n\n"
         "Пишите вопрос обычным сообщением, используйте /ask для сценария с темами "
-        "или /clear, чтобы очистить историю диалога."
+        "или /clear, чтобы очистить историю диалога.",
+        reply_markup=main_menu_kb(),
     )
 
 
 @router.message(Command("help"))
+@router.message(F.text == HELP_BUTTON)
 async def help_command(message: Message) -> None:
     await message.answer(
         "/start — создать чат и показать инструкцию\n"
         "/help — список команд\n"
         "/clear — очистить историю текущего чата\n"
         "/ask — задать вопрос через выбор темы\n"
-        "/cancel — отменить активный сценарий"
+        "/cancel — отменить активный сценарий",
+        reply_markup=main_menu_kb(),
     )
 
 
 @router.message(Command("clear"))
+@router.message(F.text == CLEAR_BUTTON)
 async def clear_command(message: Message, backend: BackendClient) -> None:
     try:
         chat_id = await get_chat_id(message, backend)
@@ -62,4 +68,4 @@ async def clear_command(message: Message, backend: BackendClient) -> None:
         await message.answer(backend_error_text(error))
         return
 
-    await message.answer("История очищена.")
+    await message.answer("История очищена.", reply_markup=main_menu_kb())
