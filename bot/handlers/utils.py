@@ -14,7 +14,9 @@ from aiogram import Bot
 from aiogram.enums import ChatAction, ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.methods.base import TelegramMethod
-from aiogram.types import Message
+from aiogram.types import InlineKeyboardMarkup, Message
+
+from bot.keyboards.inline import feedback_kb
 
 
 INTERFACE = "telegram"
@@ -63,7 +65,18 @@ def backend_error_text(error: Exception) -> str:
             payload = error.response.json()
         except ValueError:
             payload = {}
-        detail = payload.get("error", {}).get("message") if isinstance(payload, dict) else None
+        error_payload = payload.get("error", {}) if isinstance(payload, dict) else {}
+        detail_payload = payload.get("detail", {}) if isinstance(payload, dict) else {}
+        code = None
+        if isinstance(detail_payload, dict):
+            code = detail_payload.get("code")
+        if code is None and isinstance(error_payload, dict):
+            code = error_payload.get("code")
+        if code == "moderation_blocked":
+            return "Не могу обработать это сообщение: оно не прошло модерацию."
+        detail = error_payload.get("message") if isinstance(error_payload, dict) else None
+        if detail is None and isinstance(detail_payload, dict):
+            detail = detail_payload.get("message")
         if detail:
             return str(detail)
         return f"Backend вернул ошибку {error.response.status_code}. Попробуйте позже."
@@ -110,7 +123,13 @@ async def stream_to_chat(message: Message, chunks: AsyncIterator[str]) -> str:
             last_draft_at = time.monotonic()
 
     if buffer:
-        await _send_message(message, _normalize_assistant_text(buffer))
+        message_id = getattr(chunks, "message_id", None)
+        reply_markup = feedback_kb(str(message_id)) if message_id is not None else None
+        await _send_message(
+            message,
+            _normalize_assistant_text(buffer),
+            reply_markup=reply_markup,
+        )
     else:
         await _send_message(
             message,
@@ -130,22 +149,30 @@ async def _send_message_draft(bot: Bot, chat_id: int, text: str, draft_id: int) 
         return
 
 
-async def _send_message(message: Message, text: str) -> None:
+async def _send_message(
+    message: Message,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> Message:
     rendered_text = markdown_to_telegram_html(text)
     while True:
         try:
-            await message.bot.send_message(
+            return await message.bot.send_message(
                 chat_id=message.chat.id,
                 text=rendered_text,
                 parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup,
             )
-            return
         except TelegramRetryAfter as error:
             await asyncio.sleep(float(error.retry_after) + 0.1)
         except TelegramBadRequest as error:
             if _should_fallback_to_plain_text(error):
-                await message.bot.send_message(chat_id=message.chat.id, text=text)
-                return
+                return await message.bot.send_message(
+                    chat_id=message.chat.id,
+                    text=text,
+                    reply_markup=reply_markup,
+                )
             raise
 
 

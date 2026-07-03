@@ -1,5 +1,25 @@
 # Changelog
 
+## [2026-07-03]
+
+### Added
+
+- Added admin command router protected by `IsAdmin` at router level and `BOT_ADMIN_IDS` configuration.
+- Added `/stats`, `/users`, and `/broadcast <text>` commands backed by the backend `/chats/admin/*` API and `X-Admin-Token`.
+- Added inline 👍/👎 feedback buttons after assistant answers and callback handling through `POST /chats/{chat_id}/messages/{message_id}/feedback`.
+- Added background broadcast polling from the backend broadcast queue and per-recipient Telegram delivery.
+- Added `ADMIN_TOKEN` configuration for admin API calls.
+
+### Changed
+
+- Changed backend SSE parsing to store the final assistant `message_id` from the `done` event for feedback callbacks.
+- Changed HTTP error handling for admin and feedback flows to show readable Telegram messages instead of tracebacks.
+
+### Verified
+
+- Verified Docker image build through the root Compose stack.
+- Verified live polling startup, backend connectivity, handled updates, and feedback persistence against the running backend.
+
 ## [2026-07-01]
 
 ### Added

@@ -55,6 +55,33 @@ async def test_send_message_parses_sse_frames() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_message_stores_done_message_id() -> None:
+    chat_id = uuid4()
+    message_id = uuid4()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=(
+                b'data: {"type": "token", "delta": "ok"}\n\n'
+                + f'data: {{"type": "done", "message_id": "{message_id}"}}\n\n'.encode()
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="http://backend",
+    ) as http_client:
+        client = BackendClient("http://backend", client=http_client)
+        stream = client.send_message(chat_id, "Hi")
+        tokens = [token async for token in stream]
+
+    assert tokens == ["ok"]
+    assert stream.message_id == message_id
+
+
+@pytest.mark.asyncio
 async def test_send_message_preserves_token_leading_spaces() -> None:
     chat_id = uuid4()
 

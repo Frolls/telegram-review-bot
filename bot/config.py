@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     bot_token: str = Field(alias="BOT_TOKEN")
     backend_url: AnyHttpUrl = Field(alias="BACKEND_URL")
     internal_token: str = Field(default="changeme", alias="INTERNAL_TOKEN")
+    admin_token: str = Field(default="changeme-admin", alias="ADMIN_TOKEN")
     bot_api_port: int = Field(default=8081, alias="BOT_API_PORT")
     bot_admin_ids: Annotated[list[int], NoDecode] = Field(
         default_factory=list,
