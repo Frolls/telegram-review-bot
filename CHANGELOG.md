@@ -1,5 +1,25 @@
 # Changelog
 
+## [2026-07-27]
+
+### Added
+
+- Added parsing of final backend SSE metadata: `message_id`, `sources`, and `confident`.
+- Added forwarding of the sources shown with an answer to the backend feedback endpoint.
+- Added deterministic coverage for the 700 ms edit debounce and final source handling.
+
+### Changed
+
+- Changed text responses to update one Telegram message through throttled `editMessageText` calls instead of emitting a message per chunk.
+- Changed final answer rendering to attach 👍/👎 buttons after the final chunk and associate them with the persisted backend message id.
+- Updated the README with the root Compose flow, SSE behavior, debounce interval, and source-aware feedback contract.
+
+### Verified
+
+- Verified real Bot API polling as `@frolls_bot`, backend connectivity, and handled RAG message updates against the running Compose stack.
+- Verified feedback source submission to the backend and PostgreSQL persistence.
+- Verified the final bot suite: `14 passed`.
+
 ## [2026-07-03]
 
 ### Added
