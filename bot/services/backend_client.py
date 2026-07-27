@@ -66,10 +66,17 @@ class BackendClient:
         response = await self._client.delete(f"/chats/{chat_id}/messages")
         response.raise_for_status()
 
-    async def save_feedback(self, chat_id: UUID, message_id: UUID, value: str) -> None:
+    async def save_feedback(
+        self,
+        chat_id: UUID,
+        message_id: UUID,
+        value: str,
+        *,
+        sources: list[dict] | None = None,
+    ) -> None:
         response = await self._client.post(
             f"/chats/{chat_id}/messages/{message_id}/feedback",
-            json={"value": value},
+            json={"value": value, "sources": sources or []},
         )
         response.raise_for_status()
 
@@ -147,6 +154,8 @@ class BackendMessageStream:
         self._media = media
         self._mime = mime
         self.message_id: UUID | None = None
+        self.sources: list[dict] = []
+        self.confident: bool = False
 
     def __aiter__(self) -> AsyncIterator[str]:
         return self._iter()
@@ -180,6 +189,12 @@ class BackendMessageStream:
                     yield str(event.get("message") or "Backend не смог обработать сообщение.")
                     return
                 elif event.get("type") == "done":
+                    raw_sources = event.get("sources")
+                    if isinstance(raw_sources, list):
+                        self.sources = [
+                            item for item in raw_sources if isinstance(item, dict)
+                        ]
+                    self.confident = bool(event.get("confident", False))
                     raw_message_id = event.get("message_id")
                     if raw_message_id:
                         self.message_id = UUID(str(raw_message_id))

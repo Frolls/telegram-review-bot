@@ -6,7 +6,7 @@ import httpx
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 
-from bot.handlers.utils import INTERFACE, backend_error_text
+from bot.handlers.utils import INTERFACE, SHOWN_SOURCES, backend_error_text
 from bot.services.backend_client import BackendClient
 
 
@@ -33,7 +33,12 @@ async def feedback_callback(callback: CallbackQuery, backend: BackendClient) -> 
 
     try:
         chat_id = await backend.get_or_create_chat(str(callback.from_user.id), INTERFACE)
-        await backend.save_feedback(chat_id, message_id, vote)
+        await backend.save_feedback(
+            chat_id,
+            message_id,
+            vote,
+            sources=SHOWN_SOURCES.get(str(message_id), []),
+        )
     except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as error:
         await callback.answer(backend_error_text(error), show_alert=True)
         return

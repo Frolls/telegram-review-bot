@@ -82,6 +82,43 @@ async def test_send_message_stores_done_message_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_message_stores_final_sources_and_confidence() -> None:
+    chat_id = uuid4()
+    source = {
+        "id": 1,
+        "file_name": "policy.pdf",
+        "page": 4,
+        "score": 0.82,
+        "snippet": "Use creates or removes to make command tasks idempotent.",
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=(
+                b'data: {"type": "token", "delta": "30 days [1]"}\n\n'
+                + (
+                    'data: {"type": "done", "confident": true, '
+                    f'"sources": [{__import__("json").dumps(source)}]}}\n\n'
+                ).encode()
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="http://backend",
+    ) as http_client:
+        client = BackendClient("http://backend", client=http_client)
+        stream = client.send_message(chat_id, "period?")
+        tokens = [token async for token in stream]
+
+    assert tokens == ["30 days [1]"]
+    assert stream.sources == [source]
+    assert stream.confident is True
+
+
+@pytest.mark.asyncio
 async def test_send_message_preserves_token_leading_spaces() -> None:
     chat_id = uuid4()
 
@@ -160,3 +197,25 @@ async def test_clear_messages_sends_delete_to_chat_messages_url() -> None:
 
     assert seen_url == f"http://backend/chats/{chat_id}/messages"
     assert isinstance(chat_id, UUID)
+
+
+@pytest.mark.asyncio
+async def test_save_feedback_posts_shown_sources() -> None:
+    chat_id = uuid4()
+    message_id = uuid4()
+    source = {"id": 1, "file_name": "guide.md", "snippet": "text"}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/chats/{chat_id}/messages/{message_id}/feedback"
+        assert __import__("json").loads(await request.aread()) == {
+            "value": "up",
+            "sources": [source],
+        }
+        return httpx.Response(200, json={"status": "ok"})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="http://backend",
+    ) as http_client:
+        client = BackendClient("http://backend", client=http_client)
+        await client.save_feedback(chat_id, message_id, "up", sources=[source])

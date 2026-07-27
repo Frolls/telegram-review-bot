@@ -4,7 +4,6 @@ import asyncio
 import html
 import re
 import time
-import uuid
 from collections.abc import AsyncIterator
 from typing import Protocol
 from uuid import UUID
@@ -20,6 +19,9 @@ from bot.keyboards.inline import feedback_kb
 
 
 INTERFACE = "telegram"
+MIN_EDIT_INTERVAL = 0.7
+LAST_EDIT_AT: dict[int, float] = {}
+SHOWN_SOURCES: dict[str, list[dict]] = {}
 
 
 class BackendProtocol(Protocol):
@@ -87,11 +89,12 @@ async def render_stream(
     target: Message,
     chunks: AsyncIterator[str],
     *,
-    min_edit_interval: float = 1.5,
+    min_edit_interval: float = MIN_EDIT_INTERVAL,
 ) -> str:
     buffer = ""
     rendered = ""
-    last_edit_at = 0.0
+    chat_id = target.chat.id
+    last_edit_at = LAST_EDIT_AT.get(chat_id, 0.0)
 
     async for chunk in chunks:
         buffer += chunk
@@ -100,39 +103,33 @@ async def render_stream(
             await _edit_text(target, buffer)
             rendered = buffer
             last_edit_at = time.monotonic()
+            LAST_EDIT_AT[chat_id] = last_edit_at
 
     if buffer and buffer != rendered:
         await _edit_text(target, buffer)
+        LAST_EDIT_AT[chat_id] = time.monotonic()
     return buffer
 
 
 async def stream_to_chat(message: Message, chunks: AsyncIterator[str]) -> str:
-    draft_id = uuid.uuid4().int & 0xFFFFFFFF
-    buffer = ""
-    last_draft_at = 0.0
-    min_draft_interval = 1.5
-
-    await _send_message_draft(message.bot, message.chat.id, "", draft_id)
     await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-
-    async for chunk in chunks:
-        buffer += chunk
-        now = time.monotonic()
-        if buffer.strip() and now - last_draft_at >= min_draft_interval:
-            await _send_message_draft(message.bot, message.chat.id, buffer, draft_id)
-            last_draft_at = time.monotonic()
+    target = await message.answer("⏳ Ищу по базе знаний…")
+    buffer = await render_stream(target, chunks, min_edit_interval=MIN_EDIT_INTERVAL)
 
     if buffer:
         message_id = getattr(chunks, "message_id", None)
         reply_markup = feedback_kb(str(message_id)) if message_id is not None else None
-        await _send_message(
-            message,
+        sources = getattr(chunks, "sources", [])
+        if message_id is not None:
+            SHOWN_SOURCES[str(message_id)] = list(sources)
+        await _edit_text(
+            target,
             _normalize_assistant_text(buffer),
             reply_markup=reply_markup,
         )
     else:
-        await _send_message(
-            message,
+        await _edit_text(
+            target,
             "Backend не вернул текст ответа. Попробуйте ещё раз или отправьте другой файл.",
         )
     return buffer
@@ -184,11 +181,20 @@ def _normalize_assistant_text(text: str) -> str:
     return text.strip()
 
 
-async def _edit_text(target: Message, text: str) -> None:
+async def _edit_text(
+    target: Message,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
     rendered_text = markdown_to_telegram_html(text)
     while True:
         try:
-            await target.edit_text(rendered_text, parse_mode=ParseMode.HTML)
+            await target.edit_text(
+                rendered_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup,
+            )
             return
         except TelegramRetryAfter as error:
             await asyncio.sleep(float(error.retry_after) + 0.1)
@@ -196,7 +202,7 @@ async def _edit_text(target: Message, text: str) -> None:
             if "message is not modified" in error.message.lower():
                 return
             if _should_fallback_to_plain_text(error):
-                await target.edit_text(text)
+                await target.edit_text(text, reply_markup=reply_markup)
                 return
             raise
 
