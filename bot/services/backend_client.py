@@ -22,15 +22,46 @@ class BackendClient:
         base_url: str,
         *,
         admin_token: str | None = None,
+        internal_token: str | None = None,
+        owner_id: str | None = None,
         timeout: float | httpx.Timeout = 20.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._admin_token = admin_token
+        self._internal_token = internal_token
+        self._owner_id = owner_id
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=httpx.Timeout(timeout),
         )
+
+    def for_user(self, owner_id: str) -> "BackendClient":
+        return BackendClient(str(self._client.base_url), client=self._client,
+                             admin_token=self._admin_token, internal_token=self._internal_token,
+                             owner_id=owner_id)
+
+    def _headers(self) -> dict[str, str]:
+        return {"X-Internal-Token": self._internal_token or "", "X-User-ID": self._owner_id or ""}
+
+    async def pending_action(self) -> dict | None:
+        response = await self._client.get("/agent/pending", headers=self._headers())
+        response.raise_for_status()
+        return response.json().get("pending")
+
+    async def agent(self, payload: dict) -> list[dict]:
+        events = []
+        async with self._client.stream("POST", "/agent/stream", json=payload,
+                                       headers=self._headers(), timeout=180) as response:
+            response.raise_for_status()
+            async for value in _iter_sse_data(response):
+                events.append(json.loads(value))
+        return events
+
+    async def list_messages(self, chat_id: UUID) -> list[dict]:
+        response = await self._client.get(f"/chats/{chat_id}/messages", headers=self._headers(), params={"limit": 200})
+        response.raise_for_status()
+        return response.json()
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -39,6 +70,7 @@ class BackendClient:
     async def get_or_create_chat(self, owner_external_id: str, interface: str) -> UUID:
         response = await self._client.post(
             "/chats",
+            headers=self._headers(),
             json={
                 "owner_external_id": owner_external_id,
                 "interface": interface,
@@ -53,6 +85,7 @@ class BackendClient:
         content: str,
         media: bytes | None = None,
         mime: str | None = None,
+        filename: str | None = None,
     ) -> "BackendMessageStream":
         return BackendMessageStream(
             self._client,
@@ -60,10 +93,12 @@ class BackendClient:
             content=content,
             media=media,
             mime=mime,
+            filename=filename,
+            headers=self._headers(),
         )
 
     async def clear_messages(self, chat_id: UUID) -> None:
-        response = await self._client.delete(f"/chats/{chat_id}/messages")
+        response = await self._client.delete(f"/chats/{chat_id}/messages", headers=self._headers())
         response.raise_for_status()
 
     async def save_feedback(
@@ -76,6 +111,7 @@ class BackendClient:
     ) -> None:
         response = await self._client.post(
             f"/chats/{chat_id}/messages/{message_id}/feedback",
+            headers=self._headers(),
             json={"value": value, "sources": sources or []},
         )
         response.raise_for_status()
@@ -147,12 +183,16 @@ class BackendMessageStream:
         content: str,
         media: bytes | None,
         mime: str | None,
+        filename: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self._client = client
         self._chat_id = chat_id
         self._content = content
         self._media = media
         self._mime = mime
+        self._filename = filename
+        self._headers = headers or {}
         self.message_id: UUID | None = None
         self.sources: list[dict] = []
         self.confident: bool = False
@@ -164,7 +204,7 @@ class BackendMessageStream:
         data = {"content": self._content}
         files = None
         if self._media is not None:
-            filename = _filename_for_mime(self._mime)
+            filename = self._filename or _filename_for_mime(self._mime)
             files = {"media": (filename, self._media, self._mime or "application/octet-stream")}
 
         async with self._client.stream(
@@ -172,7 +212,8 @@ class BackendMessageStream:
             f"/chats/{self._chat_id}/messages",
             data=data,
             files=files,
-            timeout=120.0,
+            timeout=180.0,
+            headers=self._headers,
         ) as response:
             response.raise_for_status()
             async for payload in _iter_sse_data(response):
@@ -186,8 +227,7 @@ class BackendMessageStream:
                 if event.get("type") == "token":
                     yield str(event.get("delta", ""))
                 elif event.get("type") == "error":
-                    yield str(event.get("message") or "Backend не смог обработать сообщение.")
-                    return
+                    raise RuntimeError(str(event.get("message") or "Backend не смог обработать сообщение."))
                 elif event.get("type") == "done":
                     raw_sources = event.get("sources")
                     if isinstance(raw_sources, list):

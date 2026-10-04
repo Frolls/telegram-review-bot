@@ -16,7 +16,7 @@ MAX_PHOTO_SIZE = 2 * 1024 * 1024
 PREFERRED_PHOTO_SIZE = 768 * 1024
 PREFERRED_PHOTO_MAX_SIDE = 768
 MAX_DOCUMENT_SIZE = 10 * 1024 * 1024
-SUPPORTED_DOCUMENT_EXTENSIONS = (".pdf", ".docx")
+SUPPORTED_DOCUMENT_EXTENSIONS = (".pdf", ".docx", ".py", ".yaml", ".yml", ".diff", ".patch", ".txt", ".md", ".json", ".toml")
 
 
 @router.message(F.photo)
@@ -64,7 +64,7 @@ async def document_message(message: Message, backend: BackendClient) -> None:
     document: Document = message.document
     filename = (document.file_name or "").lower()
     if not filename.endswith(SUPPORTED_DOCUMENT_EXTENSIONS):
-        await message.answer("Поддерживаются только PDF и DOCX.")
+        await message.answer("Поддерживаются PDF, DOCX и текстовые файлы кода: PY, YAML, DIFF, TXT, MD, JSON, TOML.")
         return
     if document.file_size and document.file_size > MAX_DOCUMENT_SIZE:
         await message.answer("Документ слишком большой. Отправьте файл до 10 МБ.")
@@ -82,6 +82,7 @@ async def document_message(message: Message, backend: BackendClient) -> None:
         content=message.caption or document.file_name or "[документ]",
         media=await _download_file(message, document.file_id),
         mime=mime,
+        filename=document.file_name,
     )
 
 
@@ -120,12 +121,13 @@ async def _send_media_message(
     content: str,
     media: bytes,
     mime: str | None,
+    filename: str | None = None,
 ) -> None:
     try:
         chat_id = await get_chat_id(message, backend)
         await stream_to_chat(
             message,
-            backend.send_message(chat_id, content, media=media, mime=mime),
+            backend.send_message(chat_id, content, media=media, mime=mime, filename=filename),
         )
     except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as error:
         await message.answer(backend_error_text(error))

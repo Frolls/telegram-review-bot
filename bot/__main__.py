@@ -19,9 +19,11 @@ async def main() -> None:
 
     bot = Bot(token=settings.bot_token)
     dispatcher = Dispatcher(storage=MemoryStorage())
+    from bot.middleware import UserBackendMiddleware
+    dispatcher.update.outer_middleware(UserBackendMiddleware())
     dispatcher.include_router(router)
 
-    backend = BackendClient(str(settings.backend_url), admin_token=settings.admin_token)
+    backend = BackendClient(str(settings.backend_url), admin_token=settings.admin_token, internal_token=settings.internal_token)
     dispatcher["backend"] = backend
 
     api = build_api(bot, settings.internal_token)
