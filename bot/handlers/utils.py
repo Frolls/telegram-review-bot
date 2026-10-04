@@ -16,6 +16,7 @@ from aiogram.methods.base import TelegramMethod
 from aiogram.types import InlineKeyboardMarkup, Message
 
 from bot.keyboards.inline import feedback_kb
+from bot.formatting import TelegramHTML, paginate_html
 
 
 INTERFACE = "telegram"
@@ -91,47 +92,66 @@ async def render_stream(
     *,
     min_edit_interval: float = MIN_EDIT_INTERVAL,
 ) -> str:
-    buffer = ""
-    rendered = ""
-    chat_id = target.chat.id
-    last_edit_at = LAST_EDIT_AT.get(chat_id, 0.0)
-
-    async for chunk in chunks:
-        buffer += chunk
-        now = time.monotonic()
-        if buffer != rendered and now - last_edit_at >= min_edit_interval:
-            await _edit_text(target, buffer)
-            rendered = buffer
-            last_edit_at = time.monotonic()
-            LAST_EDIT_AT[chat_id] = last_edit_at
-
-    if buffer and buffer != rendered:
-        await _edit_text(target, buffer)
-        LAST_EDIT_AT[chat_id] = time.monotonic()
+    # The backend releases text only after moderation. Render complete, bounded
+    # pages to avoid Telegram's 4096 UTF-16-unit limit, including astral emoji.
+    buffer = "".join([chunk async for chunk in chunks])
+    pages = split_answer(buffer)
+    if pages:
+        await _edit_text(target, pages[0])
+        for page in pages[1:]:
+            await _send_message(target, page)
     return buffer
+
+
+def split_answer(text: str, max_units: int = 3500) -> list[TelegramHTML]:
+    return paginate_html(markdown_to_telegram_html(text), max_units)
+
+
+def source_summary(sources: list[dict], answer: str | None = None) -> str:
+    numbered = [(index, source) for index, source in enumerate(sources, 1)]
+    heading = "Найденные источники:"
+    if answer is not None:
+        prose = re.sub(r"```.*?```|`[^`]*`", "", answer, flags=re.DOTALL)
+        cited_ids = set(re.findall(r"(?<![\w])\[(\d+)\]", prose))
+        cited = [(index, source) for index, source in numbered
+                 if str(source.get("id", index)) in cited_ids]
+        if cited:
+            numbered = cited
+            heading = "Источники, указанные в ответе:"
+        else:
+            heading = "Найденные фрагменты (ответ без ссылок на них):"
+    lines = [heading]
+    for index, source in numbered:
+        filename = str(source.get("file_name") or source.get("filename") or source.get("source") or "Документ")[:180]
+        page = source.get("page")
+        lines.append(f"[{source.get('id', index)}] {filename}" + (f", стр. {page}" if page is not None else ""))
+        excerpt = source.get("text") or source.get("snippet")
+        if excerpt:
+            lines.append(str(excerpt).strip())
+        lines.append("")
+    return "\n".join(lines)
 
 
 async def stream_to_chat(message: Message, chunks: AsyncIterator[str]) -> str:
     await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-    target = await message.answer("⏳ Ищу по базе знаний…")
-    buffer = await render_stream(target, chunks, min_edit_interval=MIN_EDIT_INTERVAL)
-
-    if buffer:
-        message_id = getattr(chunks, "message_id", None)
-        reply_markup = feedback_kb(str(message_id)) if message_id is not None else None
-        sources = getattr(chunks, "sources", [])
-        if message_id is not None:
-            SHOWN_SOURCES[str(message_id)] = list(sources)
-        await _edit_text(
-            target,
-            _normalize_assistant_text(buffer),
-            reply_markup=reply_markup,
-        )
-    else:
-        await _edit_text(
-            target,
-            "Backend не вернул текст ответа. Попробуйте ещё раз или отправьте другой файл.",
-        )
+    target = await message.answer("⏳ Готовлю ответ…")
+    try:
+        buffer = await render_stream(target, chunks, min_edit_interval=MIN_EDIT_INTERVAL)
+    except (httpx.HTTPError, RuntimeError) as exc:
+        await _edit_text(target, str(exc) if isinstance(exc, RuntimeError) else backend_error_text(exc))
+        return ""
+    if not buffer:
+        await _edit_text(target, "Backend не вернул текст ответа. Попробуйте ещё раз.")
+        return ""
+    message_id = getattr(chunks, "message_id", None)
+    sources = getattr(chunks, "sources", [])
+    markup = feedback_kb(str(message_id)) if message_id is not None else None
+    if sources:
+        pages = split_answer(source_summary(sources, answer=buffer))
+        for index, page in enumerate(pages):
+            await _send_message(message, page, reply_markup=markup if index == len(pages) - 1 else None)
+    elif markup:
+        await _send_message(message, "Оцените ответ", reply_markup=markup)
     return buffer
 
 
@@ -167,7 +187,7 @@ async def _send_message(
             if _should_fallback_to_plain_text(error):
                 return await message.bot.send_message(
                     chat_id=message.chat.id,
-                    text=text,
+                    text=getattr(text, "plain_text", text),
                     reply_markup=reply_markup,
                 )
             raise
@@ -202,7 +222,7 @@ async def _edit_text(
             if "message is not modified" in error.message.lower():
                 return
             if _should_fallback_to_plain_text(error):
-                await target.edit_text(text, reply_markup=reply_markup)
+                await target.edit_text(getattr(text, "plain_text", text), reply_markup=reply_markup)
                 return
             raise
 
@@ -217,13 +237,19 @@ def _should_fallback_to_plain_text(error: TelegramBadRequest) -> bool:
 
 
 def markdown_to_telegram_html(text: str) -> str:
+    if isinstance(text, TelegramHTML):
+        return str(text)
     parts: list[str] = []
     cursor = 0
 
     for match in re.finditer(r"```([^\n`]*)\n?(.*?)```", text, flags=re.DOTALL):
         parts.append(_format_markdown_inline(text[cursor : match.start()]))
         language, code_text = _parse_fence(match.group(1), match.group(2))
-        code = html.escape(_normalize_code_block(language, code_text))
+        # A valid fenced block is source code: never infer line breaks inside
+        # its string literals. Repair applies only to malformed stuck fences.
+        code_text = (code_text.strip("\n") if match.group(1).strip() == language
+                     else _normalize_code_block(language, code_text))
+        code = html.escape(code_text)
         class_attr = f' class="language-{html.escape(language)}"' if language else ""
         parts.append(f"\n<pre><code{class_attr}>{code}</code></pre>\n")
         cursor = match.end()
@@ -242,6 +268,8 @@ def _format_markdown_inline(text: str) -> str:
 
 def _parse_fence(raw_info: str, raw_code: str) -> tuple[str, str]:
     info = raw_info.strip()
+    if raw_code and re.fullmatch(r"[A-Za-z0-9_+#.+-]{1,64}", info):
+        return info, raw_code
     known_languages = ("yaml", "yml", "bash", "sh", "python", "py", "json", "text")
     if info in known_languages:
         return info, raw_code
