@@ -53,6 +53,8 @@ class BackendClient:
         events = []
         async with self._client.stream("POST", "/agent/stream", json=payload,
                                        headers=self._headers(), timeout=180) as response:
+            if response.is_error:
+                await response.aread()
             response.raise_for_status()
             async for value in _iter_sse_data(response):
                 events.append(json.loads(value))
@@ -215,6 +217,8 @@ class BackendMessageStream:
             timeout=180.0,
             headers=self._headers,
         ) as response:
+            if response.is_error:
+                await response.aread()
             response.raise_for_status()
             async for payload in _iter_sse_data(response):
                 if payload == "[DONE]":

@@ -66,7 +66,7 @@ def backend_error_text(error: Exception) -> str:
     if isinstance(error, httpx.HTTPStatusError):
         try:
             payload = error.response.json()
-        except ValueError:
+        except (ValueError, httpx.ResponseNotRead):
             payload = {}
         error_payload = payload.get("error", {}) if isinstance(payload, dict) else {}
         detail_payload = payload.get("detail", {}) if isinstance(payload, dict) else {}
@@ -80,6 +80,8 @@ def backend_error_text(error: Exception) -> str:
         detail = error_payload.get("message") if isinstance(error_payload, dict) else None
         if detail is None and isinstance(detail_payload, dict):
             detail = detail_payload.get("message")
+        if detail is None and isinstance(detail_payload, str):
+            detail = detail_payload
         if detail:
             return str(detail)
         return f"Backend вернул ошибку {error.response.status_code}. Попробуйте позже."

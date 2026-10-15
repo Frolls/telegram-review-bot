@@ -219,3 +219,28 @@ async def test_save_feedback_posts_shown_sources() -> None:
     ) as http_client:
         client = BackendClient("http://backend", client=http_client)
         await client.save_feedback(chat_id, message_id, "up", sources=[source])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["agent", "chat"])
+@pytest.mark.parametrize("status", [403, 409, 503])
+async def test_streaming_http_errors_keep_response_body_for_user_message(endpoint, status):
+    from bot.handlers.utils import backend_error_text
+
+    detail = "Сначала подтвердите или отмените предыдущее действие"
+
+    class ErrorBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield __import__("json").dumps({"detail": detail}).encode()
+
+    async def handler(request):
+        return httpx.Response(status, stream=ErrorBody(), headers={"content-type": "application/json"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://backend") as http_client:
+        client = BackendClient("http://backend", client=http_client)
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            if endpoint == "agent":
+                await client.agent({"thread_id": "test", "input": {"messages": []}})
+            else:
+                _ = [token async for token in client.send_message(uuid4(), "test")]
+        assert backend_error_text(exc_info.value) == detail

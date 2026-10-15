@@ -69,8 +69,7 @@ async def agent_command(message: Message, backend: BackendClient):
             await message.answer("Пример: /agent Который сейчас час в Asia/Yekaterinburg?\nДля действия: /agent Отправь мне сообщение: ревью завершено. Перед отправкой появятся кнопки подтверждения.")
             return
         status = await message.answer("⏳ Агент выполняет запрос…")
-        content = f"Telegram ID инициатора: {message.from_user.id}. Запрос пользователя: {question}"
-        events = await backend.agent({"thread_id": THREAD, "input": {"messages": [{"role": "user", "content": content}]}})
+        events = await backend.agent({"thread_id": THREAD, "input": {"messages": [{"role": "user", "content": question}]}})
         await status.edit_text("Шаги агента:")
         await display_events(message, backend, events)
     except httpx.HTTPError as exc:
