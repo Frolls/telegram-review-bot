@@ -9,60 +9,14 @@ LLM, поиск и история диалога находятся в backend. 
 SQLite-журнал доставки уведомлений; состояние сценария `/ask` находится в памяти
 процесса и сбрасывается при перезапуске.
 
-## Запуск полного стенда
+## Запуск
 
-Для защиты используются **два репозитория и общий комплект файлов запуска**,
-который автор прилагает отдельно: `compose.yaml`, `.env.example`, общий README,
-`docs/` и `scripts/`. Поместите их в одну рабочую папку, например `Diploma/`,
-и из неё выполните:
+Нужны Python **3.11–3.13**, токен Telegram-бота и работающий backend.
+Запуск всех компонентов описан в [отдельной инструкции](DEPLOYMENT.md).
 
 ```bash
-git clone https://github.com/Frolls/Review_assistant.git Review_bot
-git clone https://github.com/Frolls/telegram-review-bot.git telegram-review-bot
-if [ ! -e .env ]; then cp .env.example .env; fi
-```
-
-Структура запуска:
-
-```text
-Diploma/
-├── compose.yaml           # общий файл из комплекта защиты
-├── .env.example
-├── .env
-├── README.md
-├── docs/
-├── scripts/
-├── Review_bot/
-└── telegram-review-bot/   # этот репозиторий
-```
-
-Нужны Docker с Compose и отдельно запущенная Ollama, доступная из контейнеров
-по `host.docker.internal:11434`, с моделями `qwen3:8b` и `qwen3-embedding:4b`.
-В общем `.env` заполните `BOT_TOKEN`, замените `INTERNAL_TOKEN` и `ADMIN_TOKEN`.
-Общий Compose передаёт одинаковые внутренние ключи backend и боту.
-
-Из общей папки:
-
-```bash
-docker compose -f compose.yaml up -d --build
-docker compose -f compose.yaml ps
-curl --fail http://localhost:8000/ready
-```
-
-Compose поднимает бот, API, PostgreSQL, Redis, Qdrant и Phoenix. Бот ждёт готовности
-API, включая первоначальную индексацию. После запуска отправьте боту `/start`.
-Логи: `docker compose -f compose.yaml logs --tail=100 bot app`.
-
-Используйте именно **общий** `Diploma/compose.yaml`. Вложенный
-`Review_bot/compose.yaml` — отдельная конфигурация разработки с другими `.env`
-и настройками хранения. Обе конфигурации одновременно запускать не следует.
-
-## Отдельный запуск бота для разработки
-
-Нужны Python **3.11–3.13** и уже работающий backend. Команды ниже выполняются
-из каталога `telegram-review-bot/`:
-
-```bash
+git clone https://github.com/Frolls/telegram-review-bot.git
+cd telegram-review-bot
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[dev]'
@@ -92,17 +46,16 @@ python -m bot
 
 `DELIVERY_DB_PATH` читается напрямую из окружения процесса: одной записи
 этой переменной в `.env` при запуске `python -m bot` недостаточно.
-В контейнерном запуске общий Compose сам задаёт `/app/var/deliveries.sqlite`
-и подключает постоянный volume.
+При контейнерном запуске задайте эту переменную в окружении контейнера
+и подключите постоянный volume для каталога журнала.
 
 Для уведомлений backend должен обращаться к API этого экземпляра бота:
 `BOT_URL=http://localhost:8081`, если оба процесса на хосте, либо
 `http://host.docker.internal:8081`, если backend в контейнере и этот адрес доступен
-из его сети. При таком варианте переопределите `BOT_URL` backend: общий Compose
-по умолчанию направляет его на контейнер `bot`.
-Не запускайте два процесса polling с одним `BOT_TOKEN`; перед отдельным запуском
-остановите контейнер бота командой `docker compose -f compose.yaml stop bot`
-из общей папки.
+из его сети.
+Не запускайте два процесса polling с одним `BOT_TOKEN`: перед локальным запуском
+остановите другой экземпляр этого бота, если он уже работает.
+После запуска отправьте боту `/start` в Telegram.
 
 ## Команды и вложения
 
@@ -160,7 +113,7 @@ python -m bot
 **`POST /notify` находится в боте**, по умолчанию на порту `8081`.
 Backend вызывает его с заголовком `X-Internal-Token` и JSON-полями
 `chat_id`, `text`, `request_id` после подтверждения действия.
-В общем Compose этот порт доступен внутри сети контейнеров.
+Адрес этого API задаётся в backend переменной `BOT_URL`.
 
 SQLite-журнал связывает `request_id` с содержимым сообщения. Повтор уже
 подтверждённой доставки не отправляет сообщение снова; другое содержимое с тем же
@@ -174,12 +127,6 @@ ID или неопределённый результат предыдущей �
 
 ```bash
 pytest tests/bot -v
-```
-
-Из общей папки стенда тесты обоих сервисов запускаются так:
-
-```bash
-./scripts/test_all.sh
 ```
 
 Зафиксированный результат **4 октября 2026 года**: 28 тестов бота пройдены.
