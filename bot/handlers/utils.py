@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import html
 import re
-import time
 from collections.abc import AsyncIterator
 from typing import Protocol
 from uuid import UUID

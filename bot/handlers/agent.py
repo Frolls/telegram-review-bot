@@ -69,7 +69,20 @@ async def agent_command(message: Message, backend: BackendClient):
             await message.answer("Пример: /agent Который сейчас час в Asia/Yekaterinburg?\nДля действия: /agent Отправь мне сообщение: ревью завершено. Перед отправкой появятся кнопки подтверждения.")
             return
         status = await message.answer("⏳ Агент выполняет запрос…")
-        events = await backend.agent({"thread_id": THREAD, "input": {"messages": [{"role": "user", "content": question}]}})
+        last_stage = None
+        async def progress(event):
+            nonlocal last_stage
+            if event.get("event") != "updates":
+                return
+            nodes = event.get("data") or {}
+            labels = {"initialize": "Готовлю запрос…", "call_model": "Проверяю ответ модели…",
+                      "execute_safe_tool": "Получены результаты инструмента…",
+                      "prepare_telegram_message": "Подготовлено действие для подтверждения…"}
+            stage = next((labels[k] for k in nodes if k in labels), None)
+            if stage and stage != last_stage:
+                last_stage = stage
+                await status.edit_text(stage)
+        events = await backend.agent({"thread_id": THREAD, "input": {"messages": [{"role": "user", "content": question}]}}, on_progress=progress)
         await status.edit_text("Шаги агента:")
         await display_events(message, backend, events)
     except httpx.HTTPError as exc:

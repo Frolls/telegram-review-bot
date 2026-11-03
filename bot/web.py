@@ -22,6 +22,10 @@ def build_api(bot: Bot, internal_token: str, *, delivery_db: str | None = None) 
     api = FastAPI()
     db_path = delivery_db or os.getenv("DELIVERY_DB_PATH", "/app/var/deliveries.sqlite")
 
+    @api.get("/health")
+    async def health():
+        return {"status": "ok"}
+
     @api.post("/notify")
     async def notify(req: NotifyRequest, x_internal_token: str = Header(...)) -> dict[str, bool]:
         if not secrets.compare_digest(x_internal_token, internal_token):

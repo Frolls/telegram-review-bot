@@ -1,87 +1,42 @@
 # Запуск полного стенда
 
-Поместите общий `compose.yaml` и `.env.example` в рабочую папку.
-Из неё клонируйте оба репозитория и создайте `.env`:
+Compose обоих сервисов и общий шаблон `.env` версионируются в backend:
+[инструкция развёртывания](https://github.com/Frolls/Review_assistant/blob/main/DEPLOYMENT.md),
+[deploy/compose.yaml](https://github.com/Frolls/Review_assistant/blob/main/deploy/compose.yaml).
+Отдельные файлы из папки Diploma не нужны.
+
+В общей рабочей папке:
 
 ```bash
 git clone https://github.com/Frolls/Review_assistant.git Review_bot
 git clone https://github.com/Frolls/telegram-review-bot.git telegram-review-bot
-# При повторной настройке сохраните существующий .env.
-if [ ! -e .env ]; then cp .env.example .env; fi
+if [ ! -e .env ]; then cp Review_bot/deploy/.env.example .env; fi
 ```
 
-Получится следующая структура:
+Заполните `.env` своим `BOT_TOKEN` и общими с backend `INTERNAL_TOKEN` / `ADMIN_TOKEN`.
+Настройте доступную из контейнеров Ollama и модели по инструкции backend.
+Существующий `.env` не перезаписывайте; новые параметры сверяйте с шаблоном.
 
-```text
-Diploma/
-├── compose.yaml
-├── .env.example
-├── .env                   # локальные настройки и ключи
-├── Review_bot/            # backend
-└── telegram-review-bot/
-```
-
-Нужны Docker с Compose и Ollama на хосте, доступная из контейнеров по
-`http://host.docker.internal:11434`. Ollama запускается отдельно от Compose;
-она должна принимать подключения с контейнерной сети, а не только с loopback.
-Заранее загрузите модели:
+Из той же общей папки:
 
 ```bash
-ollama pull qwen3:8b
-ollama pull qwen3-embedding:4b
-```
-
-В **общем** `.env` укажите действующий `BOT_TOKEN`, свои `INTERNAL_TOKEN` и
-`ADMIN_TOKEN`. Общий Compose передаст одинаковые ключи обоим сервисам.
-Основные настройки модели:
-
-```dotenv
-OPENAI_API_KEY=ollama
-OPENAI_BASE_URL=http://host.docker.internal:11434/v1
-DEFAULT_MODEL=qwen3:8b
-EMBEDDING_MODEL=qwen3-embedding:4b
-EMBEDDING_DIM=2560
-RAG_SCORE_THRESHOLD=0.5
-```
-
-Из общей папки `Diploma/`:
-
-```bash
-docker compose -f compose.yaml up -d --build
-docker compose -f compose.yaml ps
-# После завершения индексации и запуска API:
+docker compose --project-directory "$PWD" --env-file .env \
+  -f Review_bot/deploy/compose.yaml up -d --build
 curl --fail http://localhost:8000/ready
 ```
 
-Запускаются API, бот, PostgreSQL, Redis, Qdrant и Phoenix. До запуска API
-выполняются индексация корпуса и миграции БД; первая индексация может занять
-несколько минут. Бот начинает работу после готовности API.
+Бот начинает polling после готовности backend. Не запускайте второй процесс
+polling с тем же токеном. Backend вызывает HTTP API бота внутри сети по
+`http://bot:8081`; `POST /notify` требует внутренний ключ и request ID.
+Журнал доставки хранится в постоянном volume. `down -v` удаляет постоянные данные.
 
-- [Swagger](http://localhost:8000/docs) — интерактивный API.
-- [Readiness](http://localhost:8000/ready) — Redis, PostgreSQL, Qdrant, API модели, RAG и агент.
-- [Phoenix](http://localhost:6006) — трассы запросов.
-- В Telegram отправьте своему боту `/start`, затем вопрос или файл кода.
-
-Для диагностики из общей папки:
+Проверка обоих репозиториев:
 
 ```bash
-docker compose -f compose.yaml logs --tail=100 app bot
+sh Review_bot/scripts/test_all.sh
 ```
 
-Общий Compose публикует порты только на loopback хоста и сохраняет данные в
-volumes, включая журнал доставки сообщений бота. `down` останавливает стек;
-добавление `-v` удаляет его постоянные данные.
-
-Используйте `compose.yaml` из общей папки. Файл `Review_bot/compose.yaml`
-предназначен для отдельной конфигурации разработки.
-
-## Проверки
-
-Тесты обоих сервисов из общей папки:
-
-```bash
-docker compose -f compose.yaml --profile test run --rm --build tests
-docker compose -f compose.yaml --profile test run --rm --build bot-tests
-```
-
-Для тестов backend используется отдельная временная PostgreSQL.
+Для отдельного запуска бота используйте [README](README.md). Проверка девяти
+ходов агента без polling и положительного подтверждения описана в
+[scripts/README.md](scripts/README.md); сохранённые результаты — в
+[docs/verification](docs/verification/README.md).

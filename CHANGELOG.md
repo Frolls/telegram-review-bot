@@ -1,5 +1,29 @@
 # Changelog
 
+## [2026-11-03]
+
+### CI maintenance
+
+- Pinned Ruff to the locally verified 0.15.16 and made the existing lint rule set explicit, matching backend and pre-commit. Fresh installations previously selected 0.17.3 and failed lint before running tests.
+
+### Added
+
+- Added separate `/clear_chat` and `/clear_agent` controls alongside full `/clear`, plus `/escalate` and `/ticket` commands for persistent backend tickets.
+- Added live acceptance scripts using the real backend client and a standalone bot HTTP API without polling, with retained [verification evidence](docs/verification/README.md).
+- Added Ruff checks in pre-commit/CI and documented the shared deployment configuration maintained in the backend repository.
+
+### Changed
+
+- Aligned full clearing with backend chat history, agent checkpoints, pending confirmation, and local FSM state.
+- Updated progress/status handling for buffered chat answers and completed agent steps; documented the actual SSE behavior and confirmation flow.
+- Updated backend-client integration and deployment instructions for the revised APIs and portable pair checks.
+
+### Verified
+
+- Recorded 39 bot tests and one cross-service smoke test with passing Ruff checks.
+- Completed nine live agent turns covering memory, time tools, attributed knowledge search, preview/cancel, and full clearing. Confirmation of an obsolete request after clearing returned 409; the bot access audit recorded no `/notify` requests.
+- Live checks used the real backend client and bot HTTP API without Telegram polling, broadcasts, or positive delivery confirmation; these results do not establish end-to-end Telegram delivery.
+
 ## [2026-07-27]
 
 ### Added

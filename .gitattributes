@@ -1,0 +1,2 @@
+# Keep copied benchmark evidence byte-for-byte on every checkout platform.
+docs/verification/2026-11-03/** -text

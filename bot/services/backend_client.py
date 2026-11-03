@@ -44,12 +44,22 @@ class BackendClient:
     def _headers(self) -> dict[str, str]:
         return {"X-Internal-Token": self._internal_token or "", "X-User-ID": self._owner_id or ""}
 
+    async def create_escalation(self, question: str) -> dict:
+        response = await self._client.post("/escalations", json={"question": question}, headers=self._headers())
+        response.raise_for_status()
+        return response.json()
+
+    async def get_escalation(self, ticket_id: str) -> dict:
+        response = await self._client.get(f"/escalations/{ticket_id}", headers=self._headers())
+        response.raise_for_status()
+        return response.json()
+
     async def pending_action(self) -> dict | None:
         response = await self._client.get("/agent/pending", headers=self._headers())
         response.raise_for_status()
         return response.json().get("pending")
 
-    async def agent(self, payload: dict) -> list[dict]:
+    async def agent(self, payload: dict, *, on_progress=None) -> list[dict]:
         events = []
         async with self._client.stream("POST", "/agent/stream", json=payload,
                                        headers=self._headers(), timeout=180) as response:
@@ -57,7 +67,11 @@ class BackendClient:
                 await response.aread()
             response.raise_for_status()
             async for value in _iter_sse_data(response):
-                events.append(json.loads(value))
+                event = json.loads(value)
+                if on_progress is not None:
+                    await on_progress(event)
+                if event.get("event") != "progress":
+                    events.append(event)
         return events
 
     async def list_messages(self, chat_id: UUID) -> list[dict]:
@@ -98,6 +112,14 @@ class BackendClient:
             filename=filename,
             headers=self._headers(),
         )
+
+    async def clear_all_history(self, chat_id: UUID) -> None:
+        response = await self._client.delete(f"/chats/{chat_id}/history", headers=self._headers())
+        response.raise_for_status()
+
+    async def clear_agent_history(self) -> None:
+        response = await self._client.delete("/agent/history", headers=self._headers())
+        response.raise_for_status()
 
     async def clear_messages(self, chat_id: UUID) -> None:
         response = await self._client.delete(f"/chats/{chat_id}/messages", headers=self._headers())
@@ -198,6 +220,7 @@ class BackendMessageStream:
         self.message_id: UUID | None = None
         self.sources: list[dict] = []
         self.confident: bool = False
+        self.answer: dict | None = None
 
     def __aiter__(self) -> AsyncIterator[str]:
         return self._iter()
@@ -233,6 +256,7 @@ class BackendMessageStream:
                 elif event.get("type") == "error":
                     raise RuntimeError(str(event.get("message") or "Backend не смог обработать сообщение."))
                 elif event.get("type") == "done":
+                    self.answer = {key: event[key] for key in ("text", "status", "confident", "sources") if key in event}
                     raw_sources = event.get("sources")
                     if isinstance(raw_sources, list):
                         self.sources = [

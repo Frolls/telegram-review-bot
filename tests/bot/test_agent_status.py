@@ -62,3 +62,21 @@ async def test_agent_passes_user_question_without_adding_recipient_to_prompt():
         await agent_command(message, backend)
     payload = backend.agent.await_args.args[0]
     assert payload["input"]["messages"] == [{"role": "user", "content": question}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+async def test_clear_resets_both_memories_and_fsm_only_after_backend_success(monkeypatch, failure):
+    from bot.handlers import commands
+    monkeypatch.setattr(commands, "get_chat_id", AsyncMock(return_value="chat-id"))
+    backend = SimpleNamespace(clear_all_history=AsyncMock(side_effect=httpx.ConnectError("offline") if failure else None))
+    message = SimpleNamespace(answer=AsyncMock())
+    state = SimpleNamespace(clear=AsyncMock())
+    await commands.clear_command(message, backend, state)
+    backend.clear_all_history.assert_awaited_once_with("chat-id")
+    if failure:
+        state.clear.assert_not_awaited()
+        assert "История чата и агента очищена" not in message.answer.await_args.args[0]
+    else:
+        state.clear.assert_awaited_once()
+        assert "Ожидающая отправка отменена" in message.answer.await_args.args[0]
